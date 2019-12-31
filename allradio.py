@@ -27,9 +27,11 @@ FREQ="2407.75"
 MODE="DVBS2"
 overlay=""
 keyint=500
-audiobitrate=24000
-#audiobitrate=14000
+#audiobitrate=24000
+audiobitrate=14000
 res="1024x576"
+res="1280x720"
+#res="1920x1080"
 #res="768x432"
 #res="640x360"
 
@@ -155,7 +157,11 @@ h264Command_nvenc = ("ffmpeg -i %s %s -c:v h264_nvenc -preset llhp -tune film -r
 
 #h264Command_nvenc = ("ffmpeg -i %s %s -c:v h264_nvenc -preset medium -rc cbr -profile:v high -bf 3 -temporal-aq 1 -rc-lookahead 20 -pix_fmt yuv420p -r 25 -s %s -qmin 2 -qmax 50 -g 50 -b:v %d -minrate %d -maxrate %d -bufsize %d -muxrate %d -c:a aac -b:a 24000 -ar 48000 -ac 1 -f mpegts -mpegts_original_network_id 1 -mpegts_transport_stream_id 1 -mpegts_service_id 1 -mpegts_pmt_start_pid 4096 -streamid 0:256 -metadata service_provider=\"DATV\" -metadata service_name=%s -flush_packets 0 -f mpegts -async 1 -vsync 1 -"%(videosource,overlay,res,vidrate,vidrate,vidrate,BUFSIZE,Calculatebitrate,CALLSIGN)) # 6 seconds
 
-h265Command_nvenc = ("ffmpeg -hwaccel cuvid -i %s %s -c:v hevc_nvenc -preset llhp -tune film -rc cbr_ld_hq -surfaces 2 -forced-idr 1 -profile:v main -g 999999 -pix_fmt yuv420p -r 20 -s %s -qmin 2 -qmax 50 -g %s -b:v %d -minrate %d -maxrate %d -bufsize %d -muxrate %d -c:a aac -b:a 24000 -ar 48000 -ac 1 -f mpegts -mpegts_original_network_id 1 -mpegts_transport_stream_id 1 -mpegts_service_id 1 -mpegts_pmt_start_pid 4096 -streamid 0:256 -metadata service_provider=\"DATV\" -metadata service_name=%s -flush_packets 0 -f mpegts -async 1 -vsync 1"%(videosource,overlay,res,keyint,vidrate,vidrate,vidrate,BUFSIZE,Calculatebitrate,CALLSIGN)) # 3.5 seconds
+#Tomasz suggestion 
+# -pix_fmt yuv420p -vcodec hevc_nvenc -preset slow -profile:v main -rc-lookahead 15 -spatial_aq 1 -cbr 1 -rc cbr_hq -surfaces 4
+h265Command_nvenc = ("ffmpeg -hwaccel cuvid -i %s %s -c:v hevc_nvenc -tune film -pix_fmt yuv420p -preset slow  -forced-idr 1 -profile:v main -rc-lookahead 15 -spatial_aq 1 -cbr 1 -rc cbr_hq -surfaces 4 -g 999999  -r 20 -s %s -qmin 2 -qmax 50 -g %s -b:v %d -minrate %d -maxrate %d -bufsize %d -muxrate %d -c:a aac -b:a %s -ac 1 -f mpegts -mpegts_original_network_id 1 -mpegts_transport_stream_id 1 -mpegts_service_id 1 -mpegts_pmt_start_pid 4096 -streamid 0:256 -metadata service_provider=\"DATV\" -metadata service_name=%s -flush_packets 0 -f mpegts -async 1 -vsync 1"%(videosource,overlay,res,keyint,vidrate,vidrate,vidrate,BUFSIZE,Calculatebitrate,audiobitrate,CALLSIGN)) # 3.5 seconds
+
+h265Command_nvenc = ("ffmpeg -hwaccel cuvid -i %s %s -c:v hevc_nvenc -preset llhp -tune film -rc cbr_ld_hq -surfaces 2 -forced-idr 1 -profile:v main -g 999999 -pix_fmt yuv420p -r 20 -s %s -qmin 2 -qmax 50 -g %s -b:v %d -minrate %d -maxrate %d -bufsize %d -muxrate %d -c:a aac -b:a %s -ac 1 -f mpegts -mpegts_original_network_id 1 -mpegts_transport_stream_id 1 -mpegts_service_id 1 -mpegts_pmt_start_pid 4096 -streamid 0:256 -metadata service_provider=\"DATV\" -metadata service_name=%s -flush_packets 0 -f mpegts -async 1 -vsync 1"%(videosource,overlay,res,keyint,vidrate,vidrate,vidrate,BUFSIZE,Calculatebitrate,audiobitrate,CALLSIGN)) # 3.5 seconds
 
 # TODO select command with encoding option set
 #finalCommand = ("%s - | nc -u %s 1234"%(h264Command,plutoServer))
