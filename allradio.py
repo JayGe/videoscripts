@@ -1,5 +1,6 @@
 #!/usr/bin/python
-# Python wrapper for executing pluto_sdr on UDP input via SSH / IPTS to Portsdown / LimeSDR local + turning OBS on & turning amplifier on
+# Python wrapper for executing pluto_sdr on UDP input via SSH / IPTS to Portsdown / 
+# LimeSDR local + turning OBS on & turning amplifier on
 
 import sys,getopt,os,time
 import atexit
@@ -13,11 +14,11 @@ TYPEFRAME="-v" # TODO: add option to shell script
 PILOTS="" # TODO: add option to shell script
 
 # Only have one output set 1 or bad things might appen
-usePluto=0
-usePortsdown=1
+usePluto=1
+usePortsdown=0
 useLime=0
 
-CALLSIGN="GI7UGV"
+CALLSIGN="YOURCALLSIGN"
 CONSTEL="QPSK"
 SR=333
 FEC="2/3"
@@ -27,34 +28,38 @@ FREQ="2407.75"
 MODE="DVBS2"
 overlay=""
 keyint=500
+framerate=15
+h265=1
+noencode=0
 #audiobitrate=24000
-audiobitrate=14000
+#audiobitrate=14000
+audiobitrate=48000
+
 res="1024x576"
 res="1280x720"
 #res="1920x1080"
-#res="768x432"
-#res="640x360"
 
 correc=980
 Me=2
 
-videosource="~/myvideo.mkv"
-#videosource="rtmp://127.0.0.1/live/obs"
+videosource="/home/r/myvideo.mkv"
+#videosource="rtmp://192.168.1.1/something/key"
+#videosource="udp://127.0.0.1:1234"
 
 #plutoScriptFile="pluto.sh" # TODO: add script parameter option, add file check
 
-plutoServer="192.168.2.17" # TODO: merge with listenip
+plutoServer="192.168.1.1" # TODO: merge with listenip
 plutoUsername="root"
-plutoPassword="analog"
+plutoPassword="plutopassword"
 
-IPTSServer="192.168.2.19" # TODO add script options
+IPTSServer="192.168.1.1" # TODO add script options
 IPTSPort="10000"
 
-mqttServer="192.168.0.201"
+mqttServer="192.168.1.1"
 
 obsServer="localhost" # TODO: add script parameter option
 obsPort="4444"
-obsPassword="whatever"
+obsPassword="obspassword"
 
 def usage():
 	print("""
@@ -66,16 +71,19 @@ def usage():
 -c --const Constellation mapping (DVBS2) : {QPSK,8PSK,16APSK,32APSK}
 -1 --dvbs Set DVB-S Default DVB-S2
 -k --key Set key int 500
+-m --framerate Framerate default 20
+-n --noencode Do not encode or send video, just execute command (pluto only, send video to pluto from elsewhere)
 -d --disp Display the generated script, dont run
 -o --obs Turn OBS recording on
 -a --amp Turn amplifier on via MQTT
 -p --pilots Turn pilots on
 -y --overlay Turns callsign text overlay on
+-4 --h264 Use h264 instead of h265
 -r --radio radio to use : {pluto,portsdown,lime}
 """)
 
 try:
-	opts, args = getopt.getopt(sys.argv[1:], 's:k:f:c:1dg:q:pl:oayhr:', ['sr=', 
+	opts, args = getopt.getopt(sys.argv[1:], 's:k:f:c:1dg:q:pl:oayhr:m:4n', ['sr=', 
                                                    'key=',
                                                    'fec=',
                                                    'const=',
@@ -89,7 +97,10 @@ try:
                                                    'ampon',
                                                    'overlay',
                                                    'help',
-                                                   'radio='
+                                                   'radio=',
+                                                   'framerate=',
+                                                   'h264',
+                                                   'noencode'
                                                    ])
 except getopt.GetoptError as err:
         print (str(err))
@@ -116,6 +127,12 @@ for opt, arg in opts:
         CONSTEL=arg
     if opt in ('-d', '--disp'):
         runCom=0
+    if opt in ('-m', '--framerate'):
+        framerate=arg
+    if opt in ('-n', '--noencode'):
+        noencode=1
+    if opt in ('-4', '--h264'):
+        h265=0
     if opt in ('-o', '--obs'):
         obsOn=1
         import obswebsocket, obswebsocket.requests
@@ -142,34 +159,40 @@ for opt, arg in opts:
             usage()
             sys.exit(0)
 
-# 2. temporary calculation 
+# 2. temporary calculation from old f5oeo script
 Calculatebitrate = SR * 100 * Me * int(FECNUM) * correc / (int(FECDEN)* 100)
 
-print "muxrate:", Calculatebitrate
+print ("muxrate:", Calculatebitrate)
 vidrate = (Calculatebitrate - 50000 - audiobitrate * 125 /100) * 80 / 100
-print "vidrate:", vidrate
+print ("vidrate:", vidrate)
 BUFSIZE= vidrate * 40 / 100
-print "bufsize:", BUFSIZE
+print ("bufsize:", BUFSIZE)
 
-h264Command = ("ffmpeg -i %s %s -c:v libx264 -x264-params \"nal-hrd=cbr:force-cfr=1:keyint=%d\" -preset fast -pix_fmt yuv420p -r 25 -s %s -qmin 2 -qmax 50 -g 50 -b:v %d -minrate %d -maxrate %d -bufsize %d -muxrate %d -c:a aac -b:a 24000 -ar 48000 -ac 1 -f mpegts -mpegts_original_network_id 1 -mpegts_transport_stream_id 1 -mpegts_service_id 1 -mpegts_pmt_start_pid 4096 -streamid 0:256 -metadata service_provider=\"DATV\" -metadata service_name=%s -flush_packets 0 -f mpegts -async 1 -vsync 1"%(videosource,overlay,keyint,res,vidrate,vidrate,vidrate,BUFSIZE,Calculatebitrate,CALLSIGN)) #	 7 seconds, 6.7 preset fast
+h264Command = ("ffmpeg -i %s %s -c:v libx264 -x264-params \"nal-hrd=cbr:force-cfr=1:keyint=%d\" -preset fast -pix_fmt yuv420p -r %s -s %s -qmin 2 -qmax 50 -g 50 -b:v %d -minrate %d -maxrate %d -bufsize %d -muxrate %d -c:a aac -b:a 24000 -ar 48000 -ac 1 -f mpegts -mpegts_original_network_id 1 -mpegts_transport_stream_id 1 -mpegts_service_id 1 -mpegts_pmt_start_pid 4096 -streamid 0:256 -metadata service_provider=\"DATV\" -metadata service_name=%s -flush_packets 0 -f mpegts -async 1 -vsync 1"%(videosource,overlay,keyint,framerate,res,vidrate,vidrate,vidrate,BUFSIZE,Calculatebitrate,CALLSIGN)) #	 7 seconds, 6.7 preset fast
 
-h264Command_nvenc = ("ffmpeg -i %s %s -c:v h264_nvenc -preset llhp -tune film -rc cbr_ld_hq -surfaces 2-profile:v high -g 999999 -pix_fmt yuv420p -r 25 -s %s -qmin 2 -qmax 50 -g %s -b:v %d -minrate %d -maxrate %d -bufsize %d -muxrate %d -c:a aac -b:a 24000 -ar 48000 -ac 1 -f mpegts -mpegts_original_network_id 1 -mpegts_transport_stream_id 1 -mpegts_service_id 1 -mpegts_pmt_start_pid 4096 -streamid 0:256 -metadata service_provider=\"DATV\" -metadata service_name=%s -flush_packets 0 -f mpegts -async 1 -vsync 1"%(videosource,overlay,res,keyint,vidrate,vidrate,vidrate,BUFSIZE,Calculatebitrate,CALLSIGN)) #  4.75 seconds fast 
+h264Command_nvenc = ("ffmpeg -i %s %s -c:v h264_nvenc -preset llhp -tune film -rc cbr_ld_hq -surfaces 2 -profile:v high -g 999999 -pix_fmt yuv420p -r %s -s %s -qmin 2 -qmax 50 -g %s -b:v %d -minrate %d -maxrate %d -bufsize %d -muxrate %d -c:a aac -b:a 24000 -ar 48000 -ac 1 -f mpegts -mpegts_original_network_id 1 -mpegts_transport_stream_id 1 -mpegts_service_id 1 -mpegts_pmt_start_pid 4096 -streamid 0:256 -metadata service_provider=\"DATV\" -metadata service_name=%s -flush_packets 0 -f mpegts -async 1 -vsync 1"%(videosource,overlay,framerate,res,keyint,vidrate,vidrate,vidrate,BUFSIZE,Calculatebitrate,CALLSIGN)) #  4.75 seconds fast 
 
 #h264Command_nvenc = ("ffmpeg -i %s %s -c:v h264_nvenc -preset medium -rc cbr -profile:v high -bf 3 -temporal-aq 1 -rc-lookahead 20 -pix_fmt yuv420p -r 25 -s %s -qmin 2 -qmax 50 -g 50 -b:v %d -minrate %d -maxrate %d -bufsize %d -muxrate %d -c:a aac -b:a 24000 -ar 48000 -ac 1 -f mpegts -mpegts_original_network_id 1 -mpegts_transport_stream_id 1 -mpegts_service_id 1 -mpegts_pmt_start_pid 4096 -streamid 0:256 -metadata service_provider=\"DATV\" -metadata service_name=%s -flush_packets 0 -f mpegts -async 1 -vsync 1 -"%(videosource,overlay,res,vidrate,vidrate,vidrate,BUFSIZE,Calculatebitrate,CALLSIGN)) # 6 seconds
 
 #Tomasz suggestion 
 # -pix_fmt yuv420p -vcodec hevc_nvenc -preset slow -profile:v main -rc-lookahead 15 -spatial_aq 1 -cbr 1 -rc cbr_hq -surfaces 4
-h265Command_nvenc = ("ffmpeg -hwaccel cuvid -i %s %s -c:v hevc_nvenc -tune film -pix_fmt yuv420p -preset slow  -forced-idr 1 -profile:v main -rc-lookahead 15 -spatial_aq 1 -cbr 1 -rc cbr_hq -surfaces 4 -g 999999  -r 20 -s %s -qmin 2 -qmax 50 -g %s -b:v %d -minrate %d -maxrate %d -bufsize %d -muxrate %d -c:a aac -b:a %s -ac 1 -f mpegts -mpegts_original_network_id 1 -mpegts_transport_stream_id 1 -mpegts_service_id 1 -mpegts_pmt_start_pid 4096 -streamid 0:256 -metadata service_provider=\"DATV\" -metadata service_name=%s -flush_packets 0 -f mpegts -async 1 -vsync 1"%(videosource,overlay,res,keyint,vidrate,vidrate,vidrate,BUFSIZE,Calculatebitrate,audiobitrate,CALLSIGN)) # 3.5 seconds
+#h265Command_nvenc = ("ffmpeg -hwaccel cuvid -i %s %s -c:v hevc_nvenc -tune film -pix_fmt yuv420p -preset slow  -forced-idr 1 -profile:v main -rc-lookahead 15 -spatial_aq 1 -cbr 1 -rc cbr_hq -surfaces 4 -g 999999  -r %s -s %s -qmin 2 -qmax 50 -g %s -b:v %d -minrate %d -maxrate %d -bufsize %d -muxrate %d -c:a aac -b:a %s -ac 1 -f mpegts -mpegts_original_network_id 1 -mpegts_transport_stream_id 1 -mpegts_service_id 1 -mpegts_pmt_start_pid 4096 -streamid 0:256 -metadata service_provider=\"DATV\" -metadata service_name=%s -flush_packets 0 -f mpegts -async 1 -vsync 1"%(videosource,overlay,framerate,res,keyint,vidrate,vidrate,vidrate,BUFSIZE,Calculatebitrate,audiobitrate,CALLSIGN)) # 3.5 seconds
 
-h265Command_nvenc = ("ffmpeg -hwaccel cuvid -i %s %s -c:v hevc_nvenc -preset llhp -tune film -rc cbr_ld_hq -surfaces 2 -forced-idr 1 -profile:v main -g 999999 -pix_fmt yuv420p -r 20 -s %s -qmin 2 -qmax 50 -g %s -b:v %d -minrate %d -maxrate %d -bufsize %d -muxrate %d -c:a aac -b:a %s -ac 1 -f mpegts -mpegts_original_network_id 1 -mpegts_transport_stream_id 1 -mpegts_service_id 1 -mpegts_pmt_start_pid 4096 -streamid 0:256 -metadata service_provider=\"DATV\" -metadata service_name=%s -flush_packets 0 -f mpegts -async 1 -vsync 1"%(videosource,overlay,res,keyint,vidrate,vidrate,vidrate,BUFSIZE,Calculatebitrate,audiobitrate,CALLSIGN)) # 3.5 seconds
+#h265Command_nvenc = ("ffmpeg -hwaccel cuvid -i %s %s -c:v hevc_nvenc -preset llhq -tune film -rc cbr_ld_hq -surfaces 2 -forced-idr 1 -profile:v main -g 999999 -pix_fmt yuv420p -r %s -s %s -qmin 2 -qmax 50 -g %s -b:v %d -minrate %d -maxrate %d -bufsize %d -muxrate %d -c:a aac -b:a %s -ac 1 -f mpegts -mpegts_original_network_id 1 -mpegts_transport_stream_id 1 -mpegts_service_id 1 -mpegts_pmt_start_pid 4096 -streamid 0:256 -metadata service_provider=\"DATV\" -metadata service_name=%s -flush_packets 0 -f mpegts -async 1 -vsync 1"%(videosource,overlay,framerate,res,keyint,vidrate,vidrate,vidrate,BUFSIZE,Calculatebitrate,audiobitrate,CALLSIGN)) # 3.5 seconds
+h265Command_nvenc = ("ffmpeg -hwaccel_output_format cuda  -i %s %s -c:v hevc_nvenc -preset llhq -tune film -rc cbr_ld_hq -surfaces 2 -forced-idr 1 -profile:v main -g 999999 -pix_fmt yuv420p -r %s -s %s -qmin 2 -qmax 50 -g %s -b:v %d -minrate %d -maxrate %d -bufsize %d -muxrate %d -c:a aac -b:a %s -ac 1 -f mpegts -mpegts_original_network_id 1 -mpegts_transport_stream_id 1 -mpegts_service_id 1 -mpegts_pmt_start_pid 4096 -streamid 0:256 -metadata service_provider=\"DATV\" -metadata service_name=%s -flush_packets 0 -f mpegts -async 1 -vsync 1"%(videosource,overlay,framerate,res,keyint,vidrate,vidrate,vidrate,BUFSIZE,Calculatebitrate,audiobitrate,CALLSIGN)) # 3.5 seconds
+
+#h265Command_nvenc = ("ffmpeg -hwaccel_output_format cuda -i %s %s -c:v hevc_nvenc -preset llhq -rc cbr -surfaces 2 -forced-idr 1 -profile:v main -g 999999 -pix_fmt yuv420p -r %s -s %s -qmin 2 -qmax 50 -g %s -b:v %d -minrate %d -maxrate %d -bufsize %d -muxrate %d -c:a aac -b:a %s -ac 1 -f mpegts -mpegts_original_network_id 1 -mpegts_transport_stream_id 1 -mpegts_service_id 1 -mpegts_pmt_start_pid 4096 -streamid 0:256 -metadata service_provider=\"DATV\" -metadata service_name=%s -flush_packets 0 -f mpegts -async 1 -vsync 1"%(videosource,overlay,framerate,res,keyint,vidrate,vidrate,vidrate,BUFSIZE,Calculatebitrate,audiobitrate,CALLSIGN)) # 3.5 seconds
 
 # TODO select command with encoding option set
 #finalCommand = ("%s - | nc -u %s 1234"%(h264Command,plutoServer))
 #finalCommand = ("%s - | nc -u %s 1234"%(h264Command_nvenc,plutoServer))
 
-portsdownCMD = ("%s udp://%s:%s?pkt_size=1316&bitrate=%d"%(h265Command_nvenc,IPTSServer,IPTSPort,Calculatebitrate)) # local command to send to portsdown
-plutoCMD = ("%s - | nc -u %s 1234"%(h265Command_nvenc,plutoServer)) # local command to send to pluto
-limeCMD = ""
+if (h265):
+    portsdownCMD = ("%s udp://%s:%s?pkt_size=1316&bitrate=%d"%(h265Command_nvenc,IPTSServer,IPTSPort,Calculatebitrate)) # local command to send to portsdown
+    plutoCMD = ("%s - | nc -u %s 1234"%(h265Command_nvenc,plutoServer)) # local command to send to pluto
+else:
+    portsdownCMD = ("%s udp://%s:%s?pkt_size=1316&bitrate=%d"%(h264Command_nvenc,IPTSServer,IPTSPort,Calculatebitrate)) # local command to send to portsdown
+    plutoCMD = ("%s - | nc -u %s 1234"%(h264Command_nvenc,plutoServer)) # local command to send to pluto
 
 plutoCommand=("nc -u -l -p 1234 | /root/pluto_dvb -m %s -c %s -s %s000 -f %s -t %se6 -g %s"%(MODE,CONSTEL,SR,FEC,FREQ,GAIN)) # The command that will be run on the Pluto
 
@@ -204,7 +227,14 @@ if (runCom): # If runCom set, execute the command and other options, else just d
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy()) 
         ssh.connect(plutoServer, username=plutoUsername, password=plutoPassword)
         ssh_stdin, ssh_stdout, ssh_stderr = ssh.exec_command(plutoCommand)
-        os.system(plutoCMD)
+        if (noencode==1): # In this configuration the pluto should be getting its encoded video from somewhere else
+            while True:
+                print("No local encoding")
+                i = input("Any key to exit: ")
+                if not i:
+                    break
+        else:
+            os.system(plutoCMD)
         #for l in line_buffered(ssh_stdout):
         #	print (l)
     elif(usePortsdown):
@@ -219,7 +249,7 @@ if (runCom): # If runCom set, execute the command and other options, else just d
 
 else:
    	print(portsdownCMD)
-  	print(plutoCMD)
-	print(limeCMD)
+  	#print(plutoCMD)
+	#print(limeCMD)
 
 exit(0) 
